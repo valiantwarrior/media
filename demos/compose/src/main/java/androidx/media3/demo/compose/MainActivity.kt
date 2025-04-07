@@ -15,7 +15,9 @@
  */
 package androidx.media3.demo.compose
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -40,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.media3.common.MediaItem
@@ -50,19 +53,103 @@ import androidx.media3.demo.compose.data.videos
 import androidx.media3.demo.compose.layout.CONTENT_SCALES
 import androidx.media3.demo.compose.layout.noRippleClickable
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionToken
 import androidx.media3.ui.compose.PlayerSurface
 import androidx.media3.ui.compose.SURFACE_TYPE_SURFACE_VIEW
 import androidx.media3.ui.compose.modifiers.resizeWithContentScale
 import androidx.media3.ui.compose.state.rememberPresentationState
+import com.google.common.util.concurrent.ListenableFuture
 
 class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
-    setContent { ComposeDemoApp() }
+    setContent { ServiceDemoApp() }
+  }
+
+  class Service : MediaSessionService() {
+
+    private var mediaSession: MediaSession? = null
+
+    override fun onCreate() {
+      super.onCreate()
+      val player = ExoPlayer.Builder(this)
+        .build()
+        .apply {
+          setMediaItems(videos.map(MediaItem::fromUri))
+          prepare()
+        }
+      mediaSession = MediaSession.Builder(this, player)
+        .build()
+    }
+
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? =
+      mediaSession
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+      pauseAllPlayersAndStopSelf()
+    }
+
+    override fun onDestroy() {
+      mediaSession?.run {
+        player.release()
+        release()
+      }
+      mediaSession = null
+      super.onDestroy()
+    }
   }
 }
+
+@Composable
+fun ServiceDemoApp(modifier: Modifier = Modifier) {
+  val context = LocalContext.current
+  var player by remember { mutableStateOf<Player?>(null) }
+
+  // See the following resources
+  // https://developer.android.com/topic/libraries/architecture/lifecycle#onStop-and-savedState
+  // https://developer.android.com/develop/ui/views/layout/support-multi-window-mode#multi-window_mode_configuration
+  // https://developer.android.com/develop/ui/compose/layouts/adaptive/support-multi-window-mode#android_9
+
+  if (Build.VERSION.SDK_INT > 23) {
+    LifecycleStartEffect(Unit) {
+      val mediaControllerFuture = getMediaControllerFuture(context)
+      mediaControllerFuture.addListener(
+        { player = mediaControllerFuture.get() },
+        ContextCompat.getMainExecutor(context)
+      )
+      onStopOrDispose {
+        player = null
+        MediaController.releaseFuture(mediaControllerFuture)
+      }
+    }
+  } else {
+    LifecycleResumeEffect(Unit) {
+      val mediaControllerFuture = getMediaControllerFuture(context)
+      mediaControllerFuture.addListener(
+        { player = mediaControllerFuture.get() },
+        ContextCompat.getMainExecutor(context)
+      )
+      onPauseOrDispose {
+        player = null
+        MediaController.releaseFuture(mediaControllerFuture)
+      }
+    }
+  }
+
+  player?.let { MediaPlayerScreen(player = it, modifier = modifier.fillMaxSize()) }
+}
+
+private fun getMediaControllerFuture(context: Context): ListenableFuture<MediaController> =
+  MediaController.Builder(
+    context,
+    SessionToken(context, ComponentName(context, MainActivity.Service::class.java))
+  )
+    .buildAsync()
 
 @Composable
 fun ComposeDemoApp(modifier: Modifier = Modifier) {

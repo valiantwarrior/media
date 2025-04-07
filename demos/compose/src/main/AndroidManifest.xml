@@ -19,6 +19,8 @@
 
   <uses-sdk/>
   <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
   <application
       android:allowBackup="false"
@@ -34,5 +36,16 @@
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+
+    <service
+      android:name=".MainActivity$Service"
+      android:foregroundServiceType="mediaPlayback"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="androidx.media3.session.MediaLibraryService"/>
+        <action android:name="android.media.browse.MediaBrowserService"/>
+        <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH"/>
+      </intent-filter>
+    </service>
   </application>
 </manifest>
