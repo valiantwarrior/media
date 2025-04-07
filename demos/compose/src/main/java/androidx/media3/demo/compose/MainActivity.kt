@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,8 +44,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.demo.compose.buttons.ExtraControls
@@ -108,39 +113,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ServiceDemoApp(modifier: Modifier = Modifier) {
   val context = LocalContext.current
-  var player by remember { mutableStateOf<Player?>(null) }
-
-  // See the following resources
-  // https://developer.android.com/topic/libraries/architecture/lifecycle#onStop-and-savedState
-  // https://developer.android.com/develop/ui/views/layout/support-multi-window-mode#multi-window_mode_configuration
-  // https://developer.android.com/develop/ui/compose/layouts/adaptive/support-multi-window-mode#android_9
-
-  if (Build.VERSION.SDK_INT > 23) {
-    LifecycleStartEffect(Unit) {
-      val mediaControllerFuture = getMediaControllerFuture(context)
-      mediaControllerFuture.addListener(
-        { player = mediaControllerFuture.get() },
-        ContextCompat.getMainExecutor(context)
-      )
-      onStopOrDispose {
-        player = null
-        MediaController.releaseFuture(mediaControllerFuture)
-      }
-    }
-  } else {
-    LifecycleResumeEffect(Unit) {
-      val mediaControllerFuture = getMediaControllerFuture(context)
-      mediaControllerFuture.addListener(
-        { player = mediaControllerFuture.get() },
-        ContextCompat.getMainExecutor(context)
-      )
-      onPauseOrDispose {
-        player = null
-        MediaController.releaseFuture(mediaControllerFuture)
-      }
-    }
-  }
-
+  val player = rememberMediaController(context)
   player?.let { MediaPlayerScreen(player = it, modifier = modifier.fillMaxSize()) }
 }
 
@@ -150,6 +123,54 @@ private fun getMediaControllerFuture(context: Context): ListenableFuture<MediaCo
     SessionToken(context, ComponentName(context, MainActivity.Service::class.java))
   )
     .buildAsync()
+
+@Composable
+private fun rememberMediaController(
+  context: Context,
+  lifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current
+): Player? {
+  var player by remember { mutableStateOf<Player?>(null) }
+  DisposableEffect(context, lifecycleOwner) {
+    var future: ListenableFuture<MediaController>? = null
+    fun init() {
+      future = getMediaControllerFuture(context).apply {
+        addListener({ player = get() }, ContextCompat.getMainExecutor(context))
+      }
+    }
+    fun release() {
+      player = null
+      future?.let(MediaController::releaseFuture)
+    }
+    val observer = LifecycleEventObserver { _, event ->
+      // See the following resources
+      // https://developer.android.com/topic/libraries/architecture/lifecycle#onStop-and-savedState
+      // https://developer.android.com/develop/ui/views/layout/support-multi-window-mode#multi-window_mode_configuration
+      // https://developer.android.com/develop/ui/compose/layouts/adaptive/support-multi-window-mode#android_9
+      if (Build.VERSION.SDK_INT > 23) {
+        // Initialize/release in onStart()/onStop() only because in a multi-window environment multiple
+        // apps can be visible at the same time. The apps that are out-of-focus are paused, but video
+        // playback should continue.
+        when (event) {
+          Lifecycle.Event.ON_START -> init()
+          Lifecycle.Event.ON_STOP -> release()
+          else -> {}
+        }
+      } else {
+        when (event) {
+          Lifecycle.Event.ON_RESUME -> init()
+          Lifecycle.Event.ON_PAUSE -> release()
+          else -> {}
+        }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      release()
+    }
+  }
+  return player
+}
 
 @Composable
 fun ComposeDemoApp(modifier: Modifier = Modifier) {
